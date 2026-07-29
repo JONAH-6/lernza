@@ -42,6 +42,9 @@ pub enum DataKey {
     LeaveHold(u32, Address),
     /// Version history for a quest. Stores a Vec of QuestVersion snapshots.
     QuestVersionHistory(u32),
+    /// Schema version recorded after an administrator migrates a quest.
+    /// Appended so existing DataKey encodings remain stable across upgrades.
+    QuestSchemaVersion(u32),
 }
 
 // QuestInfo moved to common.
@@ -86,6 +89,10 @@ pub enum Error {
 // TTL constants and address validation moved to common.
 const MAX_TAGS: u32 = 5;
 const MAX_TAG_LEN: u32 = 32;
+/// Current on-chain layout of QuestInfo. Bump only alongside a migration.
+const QUEST_DATA_SCHEMA_VERSION: u32 = 1;
+/// Bound migration work so an administrator cannot exceed transaction limits.
+const MAX_MIGRATION_BATCH: u32 = 25;
 
 fn is_blank_ascii(s: &String) -> bool {
     let len = s.len() as usize;
@@ -139,6 +146,7 @@ pub struct QuestContract;
 impl QuestContract {
     /// Initialize the quest contract with an admin.
     pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::Unauthorized);
         }
@@ -146,6 +154,74 @@ impl QuestContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         extend_instance_ttl(&env);
         Ok(())
+    }
+
+    /// Returns the address that holds the contract-administrator role.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotFound)
+    }
+
+    /// Upgrade this contract's WASM. Only the stored administrator can invoke it.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    /// Mark a bounded set of quests as migrated to the current schema.
+    ///
+    /// The current v1 migration is a validated re-serialization pass. Future
+    /// schema revisions must update this function with their explicit
+    /// transformation before increasing `QUEST_DATA_SCHEMA_VERSION`.
+    pub fn migrate_quest_data(
+        env: Env,
+        admin: Address,
+        quest_ids: Vec<u32>,
+        target_schema_version: u32,
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+        Self::require_not_paused(&env)?;
+        if quest_ids.len() == 0
+            || quest_ids.len() > MAX_MIGRATION_BATCH
+            || target_schema_version != QUEST_DATA_SCHEMA_VERSION
+        {
+            return Err(Error::InvalidInput);
+        }
+
+        // Validate all IDs before writing so an invalid batch has no effects.
+        for quest_id in quest_ids.iter() {
+            Self::load_quest(&env, quest_id)?;
+        }
+        for quest_id in quest_ids.iter() {
+            let quest = Self::load_quest(&env, quest_id)?;
+            let quest_key = DataKey::Quest(quest_id);
+            let version_key = DataKey::QuestSchemaVersion(quest_id);
+            env.storage().persistent().set(&quest_key, &quest);
+            env.storage()
+                .persistent()
+                .set(&version_key, &target_schema_version);
+            common::extend_persistent_ttl(&env, &quest_key);
+            common::extend_persistent_ttl(&env, &version_key);
+            env.events().publish(
+                (Symbol::new(&env, "quest_migrated"),),
+                (quest_id, target_schema_version),
+            );
+        }
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Returns the recorded schema version; legacy quests are version 1.
+    pub fn get_quest_schema_version(env: Env, quest_id: u32) -> Result<u32, Error> {
+        Self::load_quest(&env, quest_id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::QuestSchemaVersion(quest_id))
+            .unwrap_or(1))
     }
 
     /// Verify a creator address. Admin only.

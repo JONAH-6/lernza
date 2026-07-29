@@ -129,6 +129,38 @@ describe("useWallet - disconnect", () => {
   })
 })
 
+describe("useWallet - session verification", () => {
+  it("rejects a stale connected state when wallet permission has been revoked", async () => {
+    mockFreighter.requestAccess.mockResolvedValue({ address: "GABC1234" })
+    const { result } = renderWallet()
+
+    await act(async () => {
+      await result.current.connect()
+    })
+    mockFreighter.getAddress.mockRejectedValue(new Error("Not authorized"))
+
+    await act(async () => {
+      await expect(result.current.verifySession()).resolves.toBe(false)
+    })
+
+    expect(result.current.connected).toBe(false)
+    expect(result.current.address).toBeNull()
+  })
+
+  it("refreshes the account from Freighter before accepting a protected session", async () => {
+    mockFreighter.getAddress.mockResolvedValue({ address: "GVERIFIED" })
+    const { result } = renderWallet()
+
+    await act(async () => {
+      await expect(result.current.verifySession()).resolves.toBe(true)
+    })
+
+    expect(mockFreighter.getAddress).toHaveBeenCalled()
+    expect(result.current.address).toBe("GVERIFIED")
+    expect(result.current.connected).toBe(true)
+  })
+})
+
 describe("useWallet - auto reconnect", () => {
   it("loads address and network when previously authorized", async () => {
     mockFreighter.getAddress.mockResolvedValue({ address: "GXYZ5678" })

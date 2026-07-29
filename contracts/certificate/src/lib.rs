@@ -2,7 +2,8 @@
 
 use common::{extend_instance_ttl, extend_persistent_ttl, BUMP, THRESHOLD};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Symbol,
+    Vec,
 };
 use stellar_access::ownable::{self as ownable, Ownable};
 use stellar_macros::{default_impl, only_owner};
@@ -69,6 +70,19 @@ impl CertificateContract {
         ownable::set_owner(&env, &owner);
         // before: env.storage().instance().extend_ttl(THRESHOLD, BUMP);
         extend_instance_ttl(&env);
+    }
+
+    /// Returns the owner, which is this contract's administrator role.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        ownable::get_owner(&env).ok_or(Error::NotOwner)
+    }
+
+    /// Upgrade this contract's WASM. The `only_owner` guard enforces the
+    /// administrator role before Soroban replaces the current code.
+    #[only_owner]
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
     }
 
     #[only_owner]

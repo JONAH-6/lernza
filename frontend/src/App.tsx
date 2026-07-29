@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, lazy, Suspense } from "react"
+import type { ReactNode } from "react"
 import { Analytics } from "@vercel/analytics/react"
 import { SpeedInsights } from "@vercel/speed-insights/react"
 import { Navbar } from "@/components/navbar"
@@ -11,6 +12,7 @@ import { TermsOfService } from "@/pages/terms"
 import { PrivacyPolicy } from "@/pages/privacy"
 import { PageSkeleton } from "@/components/page-skeleton"
 import { NotificationProvider } from "@/contexts/notification-context"
+import { useWallet } from "@/hooks/use-wallet"
 
 // Code-split heavy pages — they load on first visit to that route.
 const Dashboard = lazy(() => import("@/pages/dashboard").then((m) => ({ default: m.Dashboard })))
@@ -33,6 +35,26 @@ const VALID_PAGES = [
   "privacy",
 ] as const
 type Page = (typeof VALID_PAGES)[number] | "quest" | "creator" | "404"
+const PROTECTED_PAGES: ReadonlySet<Page> = new Set(["dashboard", "profile", "create-quest"])
+
+function SessionGuard({ children, onDenied }: { children: ReactNode; onDenied: () => void }) {
+  const { verifySession } = useWallet()
+  const [verified, setVerified] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void verifySession().then(isValid => {
+      if (!active) return
+      if (isValid) setVerified(true)
+      else onDenied()
+    })
+    return () => {
+      active = false
+    }
+  }, [onDenied, verifySession])
+
+  return verified ? <>{children}</> : <PageSkeleton />
+}
 
 function pathToPage(pathname: string): {
   page: Page
@@ -100,6 +122,11 @@ function App() {
     window.history.pushState(null, "", path)
     setState({ page: "quest", questId: id, creatorAddress: null })
     window.scrollTo({ top: 0, behavior: "smooth" })
+  }, [])
+
+  const redirectToLanding = useCallback(() => {
+    window.history.replaceState(null, "", "/")
+    setState({ page: "landing", questId: null, creatorAddress: null })
   }, [])
 
   useEffect(() => {
@@ -175,7 +202,13 @@ function App() {
               <Navbar activePage={state.page} onNavigate={handleNavigate} />
             </SectionErrorBoundary>
             <ErrorBoundary key={`${state.page}-${state.questId ?? state.creatorAddress ?? ""}`}>
-              <main id="main-content">{renderPage()}</main>
+              <main id="main-content">
+                {PROTECTED_PAGES.has(state.page) ? (
+                  <SessionGuard onDenied={redirectToLanding}>{renderPage()}</SessionGuard>
+                ) : (
+                  renderPage()
+                )}
+              </main>
             </ErrorBoundary>
             <Analytics />
             <SpeedInsights />

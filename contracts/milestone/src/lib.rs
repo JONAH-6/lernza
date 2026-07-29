@@ -1,8 +1,8 @@
 #![no_std]
 use common::{extend_instance_ttl, QuestInfo, BUMP, MAX_REWARD_AMOUNT, THRESHOLD};
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 // Quest contract error type (must match the quest contract)
@@ -239,6 +239,21 @@ impl MilestoneContract {
             .instance()
             .set(&DataKey::CertificateContract, &certificate_contract);
         extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Returns the address that holds the contract-administrator role.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Upgrade this contract's WASM. Only the stored administrator can invoke it.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
 

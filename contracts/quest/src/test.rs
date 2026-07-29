@@ -1409,6 +1409,7 @@ fn test_enrollee_cap() {
 #[test]
 fn test_initialize_admin() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(QuestContract, ());
     let client = QuestContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
@@ -1418,6 +1419,39 @@ fn test_initialize_admin() {
     // Try to initialize again should fail
     let result = client.try_initialize(&admin);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_migrate_quest_data_records_schema_version() {
+    let (env, client, owner, token) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    create_quest_helper(&env, &client, &owner, &token);
+
+    let mut ids = Vec::new(&env);
+    ids.push_back(0);
+    client.migrate_quest_data(&admin, &ids, &1);
+
+    assert_eq!(client.get_quest_schema_version(&0), 1);
+}
+
+#[test]
+fn test_migrate_quest_data_validates_entire_batch_before_writing() {
+    let (env, client, owner, token) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    create_quest_helper(&env, &client, &owner, &token);
+
+    let mut ids = Vec::new(&env);
+    ids.push_back(0);
+    ids.push_back(99);
+    let result = client.try_migrate_quest_data(&admin, &ids, &1);
+
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+    let version_key = DataKey::QuestSchemaVersion(0);
+    let migrated =
+        env.as_contract(&client.address, || env.storage().persistent().has(&version_key));
+    assert!(!migrated);
 }
 
 #[test]

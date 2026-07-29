@@ -1,8 +1,8 @@
 #![no_std]
 use common::{extend_instance_ttl, QuestInfo, QuestStatus, BUMP, MAX_REWARD_AMOUNT, THRESHOLD};
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, Env,
-    Symbol,
+    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
+    Env, Symbol,
 };
 
 // Visibility, QuestStatus, and QuestInfo moved to common.
@@ -119,6 +119,7 @@ impl RewardsContract {
         quest_contract_addr: Address,
         milestone_contract_addr: Address,
     ) -> Result<(), Error> {
+        admin.require_auth();
         if env.storage().instance().has(&DataKey::TokenAddr) {
             return Err(Error::AlreadyInitialized);
         }
@@ -141,6 +142,25 @@ impl RewardsContract {
             .set(&DataKey::RefundGracePeriod, &604_800_u64);
         env.storage().instance().set(&DataKey::Paused, &false);
         extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Returns the address that holds the contract-administrator role.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Upgrade this contract's WASM. Only the stored administrator can invoke it.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin = Self::get_admin(env.clone())?;
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
 

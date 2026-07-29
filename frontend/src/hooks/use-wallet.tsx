@@ -94,6 +94,8 @@ const freighterApi = freighter as unknown as FreighterApi
 type WalletContextValue = WalletState & {
   installUrl: string
   connect: () => Promise<void>
+  /** Re-checks wallet permission and the active account before protected use. */
+  verifySession: () => Promise<boolean>
   disconnect: () => void
   shortAddress: string | null
 }
@@ -302,6 +304,33 @@ function useWalletState(): WalletContextValue {
     clearConnection()
   }, [clearConnection])
 
+  const verifySession = useCallback(async (): Promise<boolean> => {
+    if (getManualDisconnect()) {
+      clearConnection()
+      return false
+    }
+
+    try {
+      const installed = await detectFreighter()
+      if (!installed) {
+        clearConnection()
+        return false
+      }
+      const { address } = await withTimeout(freighterApi.getAddress(), TIMEOUT_MS, TIMEOUT_ERROR)
+      if (!address) {
+        clearConnection()
+        return false
+      }
+      await syncNetwork()
+      setState(s => ({ ...s, address, connected: true, loading: false, error: null }))
+      return true
+    } catch {
+      // A stale React state value must never be accepted as a valid session.
+      clearConnection()
+      return false
+    }
+  }, [clearConnection, detectFreighter, syncNetwork])
+
   useEffect(() => {
     let active = true
 
@@ -400,12 +429,13 @@ function useWalletState(): WalletContextValue {
       ...state,
       installUrl: FREIGHTER_INSTALL_URL,
       connect,
+      verifySession,
       disconnect,
       shortAddress: state.address
         ? `${state.address.slice(0, 4)}...${state.address.slice(-4)}`
         : null,
     }),
-    [connect, disconnect, state]
+    [connect, disconnect, state, verifySession]
   )
 }
 
